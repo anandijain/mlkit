@@ -1,19 +1,3 @@
-/*
- * Copyright 2020 Google LLC. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package com.google.mlkit.vision.demo.kotlin.facedetector
 
 import android.content.Context
@@ -37,44 +21,39 @@ import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
 import java.util.Locale
+
 interface ApiService {
   @GET("servo")
   suspend fun setServoAngles(
     @Query("angle1") angle1: Int,
     @Query("angle2") angle2: Int
   ): ResponseBody
+
+  @GET("forward")
+  suspend fun moveForward(
+    @Query("steps") steps: Int
+  ): ResponseBody
+
+  @GET("backward")
+  suspend fun moveBackward(
+    @Query("steps") steps: Int
+  ): ResponseBody
 }
 
 object RetrofitClient {
   private val retrofit = Retrofit.Builder()
-    .baseUrl("http://192.168.4.31/")  // Replace with the IP address of your ESP32
+    .baseUrl("http://192.168.4.78/")  // Replace with the IP address of your ESP32
     .addConverterFactory(GsonConverterFactory.create())
     .build()
 
   val apiService: ApiService = retrofit.create(ApiService::class.java)
 }
+
 /** Face Detector Demo.  */
 class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptions?) :
   VisionProcessorBase<List<Face>>(context) {
 
   private val detector: FaceDetector
-  // Define proportional gain for controlling the servos
-  // Define proportional gain and damping factor for controlling the servos
-  // PID coefficients for controlling the servos
-  private val kP = 0.05
-  private val kI = 0.01
-  private val kD = 0.02
-  private val maxDeltaAngle = 5 // Limit the maximum change in angle per update
-
-  // Previous servo angles
-  private var previousAngle1 = 90
-  private var previousAngle2 = 90
-
-  // Previous errors and integral terms for PID control
-  private var previousErrorX = 0
-  private var previousErrorY = 0
-  private var integralErrorX = 0
-  private var integralErrorY = 0
 
   init {
     val options = detectorOptions
@@ -104,74 +83,53 @@ class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptio
 
       // Get the center of the bounding box
       val bboxCenterX = bbox.centerX()
-      val bboxCenterY = bbox.centerY()
-
+      Log.e(TAG, "bboxCenterX ${bboxCenterX}")
       // Get the dimensions of the overlay (assuming the overlay covers the entire image)
-      val overlayWidth = graphicOverlay.width
-      val overlayHeight = graphicOverlay.height
+//      val overlayWidth = graphicOverlay.width
+      val overlayWidth = 360
+      Log.e(TAG, "overlayWidth ${overlayWidth}")
+
 
       // Calculate the error between the bounding box center and the overlay center
-      val errorX = bboxCenterX - overlayWidth / 2
-      val errorY = bboxCenterY - overlayHeight / 2
+      val errorX = bboxCenterX - (overlayWidth / 2)
 
-      // Update integral errors
-      integralErrorX += errorX
-      integralErrorY += errorY
+      // Normalize the error based on the overlay width
+      val normalizedErrorX = errorX / (overlayWidth / 2).toFloat()
+      Log.e(TAG, "normalizedErrorX ${normalizedErrorX}")
 
-      // Calculate derivative errors
-      val derivativeErrorX = errorX - previousErrorX
-      val derivativeErrorY = errorY - previousErrorY
+      // Calculate the angle adjustment needed (based on 82° FoV)
+      val rotationAngle = normalizedErrorX * (82f / 2)
+      Log.e(TAG, "rotationAngle ${rotationAngle}")
+      // Convert the rotation angle to steps for the motor (assuming 1 step per degree)
+      val steps = ((rotationAngle / 360) * 1600).toInt()
 
-      // Update servo angles using PID control
-      val deltaAngle1 = (kP * errorY + kI * integralErrorY + kD * derivativeErrorY).toInt()
-      val deltaAngle2 = (kP * errorX + kI * integralErrorX + kD * derivativeErrorX).toInt()
+      Log.e(TAG, "stepts ${steps}")
 
-      val newAngle1 = previousAngle1 + deltaAngle1
-      val newAngle2 = previousAngle2 + deltaAngle2
+      // Make appropriate call to move forward or backward
+      CoroutineScope(Dispatchers.IO).launch {
+        try {
+          val response = if (steps > 0) {
+//            RetrofitClient.apiService.moveForward(steps)
+            RetrofitClient.apiService.moveForward(steps)
 
-      // Ensure angles are within 0-180 range
-      val angle1Int = 180 - newAngle1.coerceIn(0, 180)
-      val angle2Int = 180 - newAngle2.coerceIn(0, 180)
-
-      previousAngle1 = angle1Int
-      previousAngle2 = angle2Int
-      previousErrorX = errorX
-      previousErrorY = errorY
-
-      Log.d(TAG, "angles are $angle1Int and $angle2Int")
-
-      if (angle1Int in 0..180 && angle2Int in 0..180) {
-        CoroutineScope(Dispatchers.IO).launch {
-          try {
-            val response = RetrofitClient.apiService.setServoAngles(
-              angle1Int,
-              angle2Int
-            ).string()
-            withContext(Dispatchers.Main) {
-              // Handle response if needed
-            }
-          } catch (e: Exception) {
-            withContext(Dispatchers.Main) {
-              // Handle error if needed
-            }
+          } else {
+            RetrofitClient.apiService.moveBackward(-steps)
+          }
+          withContext(Dispatchers.Main) {
+            // Handle response if needed
+            Log.d(TAG, "Motor moved: ${response.string()}")
+          }
+        } catch (e: Exception) {
+          withContext(Dispatchers.Main) {
+            // Handle error if needed
+            Log.e(TAG, "Error moving motor: $e")
           }
         }
-      } else {
-        // Log invalid angles or handle as needed
       }
       Log.d(TAG, "Face bounding box: " + face.boundingBox)
       logExtrasForTesting(face)
     }
   }
-
-
-
-//  fun rect_center(face: Face) : (Int, Int) {
-//    val x = face.boundingBox.centerX()
-//    val y = face.boundingBox.centerY()
-//    return (x, y)
-//  }
-//
 
   override fun onFailure(e: Exception) {
     Log.e(TAG, "Face detection failed $e")
@@ -236,9 +194,9 @@ class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptio
             Log.v(
               MANUAL_TESTING_LOG,
               "Position for face landmark: " +
-                landMarkTypesStrings[i] +
-                " is :" +
-                landmarkPositionStr
+                      landMarkTypesStrings[i] +
+                      " is :" +
+                      landmarkPositionStr
             )
           }
         }
