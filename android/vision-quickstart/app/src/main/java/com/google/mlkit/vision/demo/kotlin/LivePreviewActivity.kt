@@ -24,6 +24,7 @@ import android.view.View
 import android.widget.AdapterView
 import android.widget.AdapterView.OnItemSelectedListener
 import android.widget.ArrayAdapter
+import android.widget.Button
 import android.widget.CompoundButton
 import android.widget.ImageView
 import android.widget.Spinner
@@ -220,8 +221,10 @@ class LivePreviewActivity :
         FACE_DETECTION -> {
           Log.i(TAG, "Using Face Detector Processor")
           val faceDetectorOptions = PreferenceUtils.getFaceDetectorOptions(this)
+          val moveButton: Button = findViewById(R.id.move_button)
+
           cameraSource!!.setMachineLearningFrameProcessor(
-            FaceDetectorProcessor(this, faceDetectorOptions)
+            FaceDetectorProcessor(this, faceDetectorOptions, moveButton)
           )
         }
         BARCODE_SCANNING -> {

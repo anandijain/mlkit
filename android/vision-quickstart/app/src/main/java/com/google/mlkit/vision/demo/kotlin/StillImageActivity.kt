@@ -35,6 +35,7 @@ import android.view.ViewTreeObserver
 import android.widget.AdapterView
 import android.widget.AdapterView.OnItemSelectedListener
 import android.widget.ArrayAdapter
+import android.widget.Button
 import android.widget.ImageView
 import android.widget.PopupMenu
 import android.widget.Spinner
@@ -381,8 +382,10 @@ class StillImageActivity : AppCompatActivity() {
         }
         FACE_DETECTION -> {
           Log.i(TAG, "Using Face Detector Processor")
+          val moveButton: Button = findViewById(R.id.move_button)
+
           val faceDetectorOptions = PreferenceUtils.getFaceDetectorOptions(this)
-          imageProcessor = FaceDetectorProcessor(this, faceDetectorOptions)
+          imageProcessor = FaceDetectorProcessor(this, faceDetectorOptions, moveButton)
         }
         BARCODE_SCANNING -> imageProcessor = BarcodeScannerProcessor(this, zoomCallback = null)
         TEXT_RECOGNITION_LATIN ->

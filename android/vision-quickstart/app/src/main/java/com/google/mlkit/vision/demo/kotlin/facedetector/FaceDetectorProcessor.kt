@@ -2,6 +2,7 @@ package com.google.mlkit.vision.demo.kotlin.facedetector
 
 import android.content.Context
 import android.util.Log
+import android.widget.Button
 import com.google.android.gms.tasks.Task
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.demo.GraphicOverlay
@@ -50,10 +51,11 @@ object RetrofitClient {
 }
 
 /** Face Detector Demo.  */
-class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptions?) :
+class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptions?, private val moveButton: Button) :
   VisionProcessorBase<List<Face>>(context) {
 
   private val detector: FaceDetector
+  private var stepsToMove: Int = 0
 
   init {
     val options = detectorOptions
@@ -65,6 +67,11 @@ class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptio
     detector = FaceDetection.getClient(options)
 
     Log.v(MANUAL_TESTING_LOG, "Face detector options: $options")
+
+    // Set up the button listener
+    moveButton.setOnClickListener {
+      moveMotor()
+    }
   }
 
   override fun stop() {
@@ -85,10 +92,8 @@ class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptio
       val bboxCenterX = bbox.centerX()
       Log.e(TAG, "bboxCenterX ${bboxCenterX}")
       // Get the dimensions of the overlay (assuming the overlay covers the entire image)
-//      val overlayWidth = graphicOverlay.width
       val overlayWidth = 360
       Log.e(TAG, "overlayWidth ${overlayWidth}")
-
 
       // Calculate the error between the bounding box center and the overlay center
       val errorX = bboxCenterX - (overlayWidth / 2)
@@ -100,34 +105,31 @@ class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptio
       // Calculate the angle adjustment needed (based on 82° FoV)
       val rotationAngle = normalizedErrorX * (82f / 2)
       Log.e(TAG, "rotationAngle ${rotationAngle}")
+
       // Convert the rotation angle to steps for the motor (assuming 1 step per degree)
-      val steps = ((rotationAngle / 360) * 1600).toInt()
+      stepsToMove = ((rotationAngle / 360) * 1600).toInt()
+      Log.e(TAG, "stepsToMove ${stepsToMove}")
+    }
+  }
 
-      Log.e(TAG, "stepts ${steps}")
-
-      // Make appropriate call to move forward or backward
-      CoroutineScope(Dispatchers.IO).launch {
-        try {
-          val response = if (steps > 0) {
-//            RetrofitClient.apiService.moveForward(steps)
-            RetrofitClient.apiService.moveForward(steps)
-
-          } else {
-            RetrofitClient.apiService.moveBackward(-steps)
-          }
-          withContext(Dispatchers.Main) {
-            // Handle response if needed
-            Log.d(TAG, "Motor moved: ${response.string()}")
-          }
-        } catch (e: Exception) {
-          withContext(Dispatchers.Main) {
-            // Handle error if needed
-            Log.e(TAG, "Error moving motor: $e")
-          }
+  private fun moveMotor() {
+    CoroutineScope(Dispatchers.IO).launch {
+      try {
+        val response = if (stepsToMove > 0) {
+          RetrofitClient.apiService.moveForward(stepsToMove)
+        } else {
+          RetrofitClient.apiService.moveBackward(-stepsToMove)
+        }
+        withContext(Dispatchers.Main) {
+          // Handle response if needed
+          Log.d(TAG, "Motor moved: ${response.string()}")
+        }
+      } catch (e: Exception) {
+        withContext(Dispatchers.Main) {
+          // Handle error if needed
+          Log.e(TAG, "Error moving motor: $e")
         }
       }
-      Log.d(TAG, "Face bounding box: " + face.boundingBox)
-      logExtrasForTesting(face)
     }
   }
 

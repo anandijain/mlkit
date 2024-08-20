@@ -25,6 +25,7 @@ import android.view.View
 import android.widget.AdapterView
 import android.widget.AdapterView.OnItemSelectedListener
 import android.widget.ArrayAdapter
+import android.widget.Button
 import android.widget.CompoundButton
 import android.widget.ImageView
 import android.widget.Spinner
@@ -148,6 +149,11 @@ class CameraXLivePreviewActivity :
       intent.putExtra(SettingsActivity.EXTRA_LAUNCH_SOURCE, LaunchSource.CAMERAX_LIVE_PREVIEW)
       startActivity(intent)
     }
+    val moveButton: Button = findViewById(R.id.move_button)
+
+    // Initialize the face detector processor with the button
+    val faceDetectorProcessor = FaceDetectorProcessor(this, null, moveButton)
+
   }
 
   override fun onSaveInstanceState(bundle: Bundle) {
@@ -305,7 +311,10 @@ class CameraXLivePreviewActivity :
           FACE_DETECTION -> {
             Log.i(TAG, "Using Face Detector Processor")
             val faceDetectorOptions = PreferenceUtils.getFaceDetectorOptions(this)
-            FaceDetectorProcessor(this, faceDetectorOptions)
+            val moveButton: Button = findViewById(R.id.move_button)
+
+            FaceDetectorProcessor(this, faceDetectorOptions, moveButton)
+
           }
           BARCODE_SCANNING -> {
             Log.i(TAG, "Using Barcode Detector Processor")
