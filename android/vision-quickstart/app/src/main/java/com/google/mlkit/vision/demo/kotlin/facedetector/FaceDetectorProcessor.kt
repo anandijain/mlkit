@@ -56,6 +56,11 @@ class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptio
 
   private val detector: FaceDetector
   private var stepsToMove: Int = 0
+  private var frameCounter: Int = 0
+
+//  private var previousError: Float = 0f
+//  private val Kp: Float = 1.0f // Proportional gain
+//  private val Kd: Float = 0.5f // Derivative gain
 
   init {
     val options = detectorOptions
@@ -83,32 +88,40 @@ class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptio
     return detector.process(image)
   }
 
+
   override fun onSuccess(faces: List<Face>, graphicOverlay: GraphicOverlay) {
-    for (face in faces) {
-      graphicOverlay.add(FaceGraphic(graphicOverlay, face))
-      val bbox = face.boundingBox
+    frameCounter++
+    if (frameCounter % 10 == 0) {
+      for (face in faces) {
+        graphicOverlay.add(FaceGraphic(graphicOverlay, face))
+        val bbox = face.boundingBox
 
-      // Get the center of the bounding box
-      val bboxCenterX = bbox.centerX()
-      Log.e(TAG, "bboxCenterX ${bboxCenterX}")
-      // Get the dimensions of the overlay (assuming the overlay covers the entire image)
-      val overlayWidth = 360
-      Log.e(TAG, "overlayWidth ${overlayWidth}")
+        // Get the center of the bounding box
+        val bboxCenterX = bbox.centerX()
+        Log.e(TAG, "bboxCenterX ${bboxCenterX}")
+        val overlayWidth = 360
+        Log.e(TAG, "overlayWidth ${overlayWidth}")
 
-      // Calculate the error between the bounding box center and the overlay center
-      val errorX = bboxCenterX - (overlayWidth / 2)
+        // Calculate the error between the bounding box center and the overlay center
+        val errorX = bboxCenterX - (overlayWidth / 2)
+        val normalizedErrorX = errorX / (overlayWidth / 2).toFloat()
+        Log.e(TAG, "normalizedErrorX ${normalizedErrorX}")
 
-      // Normalize the error based on the overlay width
-      val normalizedErrorX = errorX / (overlayWidth / 2).toFloat()
-      Log.e(TAG, "normalizedErrorX ${normalizedErrorX}")
+        // PD control
+        val proportional = Kp * normalizedErrorX
+        val derivative = Kd * (normalizedErrorX - previousError)
+        val controlOutput = proportional + derivative
 
-      // Calculate the angle adjustment needed (based on 82° FoV)
-      val rotationAngle = normalizedErrorX * (82f / 2)
-      Log.e(TAG, "rotationAngle ${rotationAngle}")
+        previousError = normalizedErrorX
 
-      // Convert the rotation angle to steps for the motor (assuming 1 step per degree)
-      stepsToMove = ((rotationAngle / 360) * 1600).toInt()
-      Log.e(TAG, "stepsToMove ${stepsToMove}")
+        // Calculate the angle adjustment based on control output
+        val rotationAngle = controlOutput * (82f / 2)
+        Log.e(TAG, "rotationAngle ${rotationAngle}")
+
+        stepsToMove = ((rotationAngle / 360) * 1600).toInt()
+        Log.e(TAG, "stepsToMove ${stepsToMove}")
+        moveMotor()
+      }
     }
   }
 
