@@ -108,17 +108,17 @@ class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptio
         Log.e(TAG, "normalizedErrorX ${normalizedErrorX}")
 
         // PD control
-        val proportional = Kp * normalizedErrorX
-        val derivative = Kd * (normalizedErrorX - previousError)
-        val controlOutput = proportional + derivative
-
-        previousError = normalizedErrorX
+//        val proportional = Kp * normalizedErrorX
+//        val derivative = Kd * (normalizedErrorX - previousError)
+//        val controlOutput = proportional + derivative
+//
+//        previousError = normalizedErrorX
 
         // Calculate the angle adjustment based on control output
-        val rotationAngle = controlOutput * (82f / 2)
+        val rotationAngle = normalizedErrorX * (82f / 2)
         Log.e(TAG, "rotationAngle ${rotationAngle}")
 
-        stepsToMove = ((rotationAngle / 360) * 1600).toInt()
+        stepsToMove = ((rotationAngle / 360) * 200).toInt()
         Log.e(TAG, "stepsToMove ${stepsToMove}")
         moveMotor()
       }
