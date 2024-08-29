@@ -11,7 +11,6 @@ import com.google.mlkit.vision.face.Face
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetector
 import com.google.mlkit.vision.face.FaceDetectorOptions
-import com.google.mlkit.vision.face.FaceLandmark
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -24,26 +23,18 @@ import retrofit2.http.Query
 import java.util.Locale
 
 interface ApiService {
-  @GET("servo")
-  suspend fun setServoAngles(
-    @Query("angle1") angle1: Int,
-    @Query("angle2") angle2: Int
-  ): ResponseBody
-
-  @GET("forward")
-  suspend fun moveForward(
-    @Query("steps") steps: Int
-  ): ResponseBody
-
-  @GET("backward")
-  suspend fun moveBackward(
-    @Query("steps") steps: Int
+  @GET("control")
+  suspend fun controlMotors(
+    @Query("yaw_dir") yawDir: String,
+    @Query("yaw_steps") yawSteps: Int,
+    @Query("pitch_dir") pitchDir: String,
+    @Query("pitch_steps") pitchSteps: Int
   ): ResponseBody
 }
 
 object RetrofitClient {
   private val retrofit = Retrofit.Builder()
-    .baseUrl("http://192.168.4.78/")  // Replace with the IP address of your ESP32
+    .baseUrl("http://192.168.4.80/")  // Replace with the IP address of your ESP32
     .addConverterFactory(GsonConverterFactory.create())
     .build()
 
@@ -55,12 +46,27 @@ class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptio
   VisionProcessorBase<List<Face>>(context) {
 
   private val detector: FaceDetector
-  private var stepsToMove: Int = 0
+
+  // this is for portrait orientation
+//  (71.53216490394719, 56.75959864409148)
+//
+  private var diagonal_fov = 84
+  private var horizontal_fov = 56.75959864409148
+  private var vertical_fov = 71.53216490394719
+
+  private var stepsToMoveX: Int = 0
+  private var stepsToMoveY: Int = 0
   private var frameCounter: Int = 0
 
-  private var previousError: Float = 0f
+  private var normalizedErrorX: Float = 0f
+  private var normalizedErrorY: Float = 0f
+  private var previousErrorX: Float = 0f
+  private var previousErrorY: Float = 0f
   private val Kp: Float = 1f // Proportional gain
   private val Kd: Float = 0f // Derivative gain
+
+  private var steps_per_revolution = 200
+
 
   init {
     val options = detectorOptions
@@ -76,7 +82,7 @@ class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptio
     // Set up the button listener
     moveButton.setOnClickListener {
       Log.e(TAG, "move Button clicked")
-      moveMotor()
+      moveMotors()
     }
   }
 
@@ -89,7 +95,6 @@ class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptio
     return detector.process(image)
   }
 
-
   override fun onSuccess(faces: List<Face>, graphicOverlay: GraphicOverlay) {
     frameCounter++
     if (frameCounter % 2 == 0) {
@@ -99,49 +104,65 @@ class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptio
 
         // Get the center of the bounding box
         val bboxCenterX = bbox.centerX()
-        Log.e(TAG, "bboxCenterX ${bboxCenterX}")
+        val bboxCenterY = bbox.centerY()
+        Log.e(TAG, "bboxCenter ($bboxCenterX, $bboxCenterY)")
         val overlayWidth = 360
-        Log.e(TAG, "overlayWidth ${overlayWidth}")
+        val overlayHeight = 640
+//        Log.e(TAG, "overlayWidth $overlayWidth")
 
         // Calculate the error between the bounding box center and the overlay center
         val errorX = bboxCenterX - (overlayWidth / 2)
-        val normalizedErrorX = errorX / (overlayWidth / 2).toFloat()
-        Log.e(TAG, "normalizedErrorX ${normalizedErrorX}")
+        normalizedErrorX = errorX / (overlayWidth / 2).toFloat()
+        val errorY = bboxCenterY - (overlayHeight / 2)
+        normalizedErrorY = errorY / (overlayHeight / 2).toFloat()
+        Log.e(TAG, "normalizedErrorX $normalizedErrorX")
 
         // PD control
         val proportional = Kp * normalizedErrorX
-        val derivative = Kd * (normalizedErrorX - previousError)
+        val derivative = Kd * (normalizedErrorX - previousErrorX)
         val controlOutput = proportional + derivative
 
-        previousError = normalizedErrorX
+        previousErrorX = normalizedErrorX
+
+        val proportionalY = Kp * normalizedErrorY
+        val derivativeY = Kd * (normalizedErrorY - previousErrorY)
+        val controlOutputY = proportionalY + derivativeY
+
+        previousErrorY = normalizedErrorY
 
         // Calculate the angle adjustment based on control output
-        val rotationAngle = controlOutput * (82f / 2)
-        Log.e(TAG, "rotationAngle ${rotationAngle}")
+        val rotationAngleX = controlOutput * (horizontal_fov / 2)
+        val rotationAngleY = controlOutputY * (vertical_fov / 2)
+        Log.e(TAG, "rotationAngle $rotationAngleX $rotationAngleY ")
 
-        stepsToMove = -((rotationAngle / 360) * 200).toInt()
-        Log.e(TAG, "stepsToMove ${stepsToMove}")
-//        moveMotor()
+        stepsToMoveX = -((rotationAngleX / 360) * steps_per_revolution).toInt()
+        stepsToMoveY = -((rotationAngleY / 360) * steps_per_revolution).toInt()
+        Log.e(TAG, "stepsToMove ($stepsToMoveX, $stepsToMoveY)")
+
+        // Control both yaw and pitch motors
+        moveMotors()
       }
     }
   }
 
-  private fun moveMotor() {
+  private fun moveMotors() {
+    val yawDir = if (normalizedErrorX > 0) "clockwise" else "counterclockwise"
+    val yawSteps = Math.abs(stepsToMoveX)
+
+    val pitchDir = if (normalizedErrorY > 0) "clockwise" else "counterclockwise"
+    val pitchSteps = Math.abs(stepsToMoveY)
+
     CoroutineScope(Dispatchers.IO).launch {
       try {
-        val response = if (stepsToMove > 0) {
-          RetrofitClient.apiService.moveForward(stepsToMove)
-        } else {
-          RetrofitClient.apiService.moveBackward(-stepsToMove)
-        }
+        val response = RetrofitClient.apiService.controlMotors(yawDir, yawSteps, pitchDir, pitchSteps)
         withContext(Dispatchers.Main) {
           // Handle response if needed
-          Log.d(TAG, "Motor moved: ${response.string()}")
+          Log.d(TAG, "Motors moved: ${response.string()}")
         }
       } catch (e: Exception) {
         withContext(Dispatchers.Main) {
           // Handle error if needed
-          Log.e(TAG, "Error moving motor: $e")
+          Log.e(TAG, "Error moving motors: $e")
         }
       }
     }
@@ -153,86 +174,6 @@ class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptio
 
   companion object {
     private const val TAG = "FaceDetectorProcessor"
-    private fun logExtrasForTesting(face: Face?) {
-      if (face != null) {
-        Log.v(
-          MANUAL_TESTING_LOG,
-          "face bounding box: " + face.boundingBox.flattenToString()
-        )
-        Log.v(
-          MANUAL_TESTING_LOG,
-          "face Euler Angle X: " + face.headEulerAngleX
-        )
-        Log.v(
-          MANUAL_TESTING_LOG,
-          "face Euler Angle Y: " + face.headEulerAngleY
-        )
-        Log.v(
-          MANUAL_TESTING_LOG,
-          "face Euler Angle Z: " + face.headEulerAngleZ
-        )
-        // All landmarks
-        val landMarkTypes = intArrayOf(
-          FaceLandmark.MOUTH_BOTTOM,
-          FaceLandmark.MOUTH_RIGHT,
-          FaceLandmark.MOUTH_LEFT,
-          FaceLandmark.RIGHT_EYE,
-          FaceLandmark.LEFT_EYE,
-          FaceLandmark.RIGHT_EAR,
-          FaceLandmark.LEFT_EAR,
-          FaceLandmark.RIGHT_CHEEK,
-          FaceLandmark.LEFT_CHEEK,
-          FaceLandmark.NOSE_BASE
-        )
-        val landMarkTypesStrings = arrayOf(
-          "MOUTH_BOTTOM",
-          "MOUTH_RIGHT",
-          "MOUTH_LEFT",
-          "RIGHT_EYE",
-          "LEFT_EYE",
-          "RIGHT_EAR",
-          "LEFT_EAR",
-          "RIGHT_CHEEK",
-          "LEFT_CHEEK",
-          "NOSE_BASE"
-        )
-        for (i in landMarkTypes.indices) {
-          val landmark = face.getLandmark(landMarkTypes[i])
-          if (landmark == null) {
-            Log.v(
-              MANUAL_TESTING_LOG,
-              "No landmark of type: " + landMarkTypesStrings[i] + " has been detected"
-            )
-          } else {
-            val landmarkPosition = landmark.position
-            val landmarkPositionStr =
-              String.format(Locale.US, "x: %f , y: %f", landmarkPosition.x, landmarkPosition.y)
-            Log.v(
-              MANUAL_TESTING_LOG,
-              "Position for face landmark: " +
-                      landMarkTypesStrings[i] +
-                      " is :" +
-                      landmarkPositionStr
-            )
-          }
-        }
-        Log.v(
-          MANUAL_TESTING_LOG,
-          "face left eye open probability: " + face.leftEyeOpenProbability
-        )
-        Log.v(
-          MANUAL_TESTING_LOG,
-          "face right eye open probability: " + face.rightEyeOpenProbability
-        )
-        Log.v(
-          MANUAL_TESTING_LOG,
-          "face smiling probability: " + face.smilingProbability
-        )
-        Log.v(
-          MANUAL_TESTING_LOG,
-          "face tracking id: " + face.trackingId
-        )
-      }
-    }
+    private const val MANUAL_TESTING_LOG = "ManualTesting"
   }
 }
