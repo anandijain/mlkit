@@ -58,9 +58,9 @@ class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptio
   private var stepsToMove: Int = 0
   private var frameCounter: Int = 0
 
-//  private var previousError: Float = 0f
-//  private val Kp: Float = 1.0f // Proportional gain
-//  private val Kd: Float = 0.5f // Derivative gain
+  private var previousError: Float = 0f
+  private val Kp: Float = 1f // Proportional gain
+  private val Kd: Float = 0f // Derivative gain
 
   init {
     val options = detectorOptions
@@ -75,6 +75,7 @@ class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptio
 
     // Set up the button listener
     moveButton.setOnClickListener {
+      Log.e(TAG, "move Button clicked")
       moveMotor()
     }
   }
@@ -91,7 +92,7 @@ class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptio
 
   override fun onSuccess(faces: List<Face>, graphicOverlay: GraphicOverlay) {
     frameCounter++
-    if (frameCounter % 10 == 0) {
+    if (frameCounter % 2 == 0) {
       for (face in faces) {
         graphicOverlay.add(FaceGraphic(graphicOverlay, face))
         val bbox = face.boundingBox
@@ -108,19 +109,19 @@ class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptio
         Log.e(TAG, "normalizedErrorX ${normalizedErrorX}")
 
         // PD control
-//        val proportional = Kp * normalizedErrorX
-//        val derivative = Kd * (normalizedErrorX - previousError)
-//        val controlOutput = proportional + derivative
-//
-//        previousError = normalizedErrorX
+        val proportional = Kp * normalizedErrorX
+        val derivative = Kd * (normalizedErrorX - previousError)
+        val controlOutput = proportional + derivative
+
+        previousError = normalizedErrorX
 
         // Calculate the angle adjustment based on control output
-        val rotationAngle = normalizedErrorX * (82f / 2)
+        val rotationAngle = controlOutput * (82f / 2)
         Log.e(TAG, "rotationAngle ${rotationAngle}")
 
-        stepsToMove = ((rotationAngle / 360) * 200).toInt()
+        stepsToMove = -((rotationAngle / 360) * 200).toInt()
         Log.e(TAG, "stepsToMove ${stepsToMove}")
-        moveMotor()
+//        moveMotor()
       }
     }
   }
