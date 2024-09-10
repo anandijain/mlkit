@@ -11,6 +11,7 @@ import com.google.mlkit.vision.face.Face
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetector
 import com.google.mlkit.vision.face.FaceDetectorOptions
+import com.hoho.android.usbserial.driver.UsbSerialPort
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -20,6 +21,8 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
+import java.io.IOException
+import java.nio.charset.StandardCharsets
 import java.util.Locale
 
 interface ApiService {
@@ -42,7 +45,7 @@ object RetrofitClient {
 }
 
 /** Face Detector Demo.  */
-class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptions?, private val moveButton: Button) :
+class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptions?, private val moveButton: Button, serialPort: UsbSerialPort?) :
   VisionProcessorBase<List<Face>>(context) {
 
   private val detector: FaceDetector
@@ -66,7 +69,7 @@ class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptio
   private val Kd: Float = 0f // Derivative gain
 
   private var steps_per_revolution = 200
-
+  val serialPort = serialPort
 
   init {
     val options = detectorOptions
@@ -96,6 +99,8 @@ class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptio
   }
 
   override fun onSuccess(faces: List<Face>, graphicOverlay: GraphicOverlay) {
+
+    Log.e("walks talks quacks likea duck ", "serialport is open : ${serialPort?.isOpen.toString()}")
     frameCounter++
     if (frameCounter % 2 == 0) {
       for (face in faces) {
@@ -151,21 +156,27 @@ class FaceDetectorProcessor(context: Context, detectorOptions: FaceDetectorOptio
 
     val pitchDir = if (normalizedErrorY > 0) "clockwise" else "counterclockwise"
     val pitchSteps = Math.abs(stepsToMoveY)
-
-    CoroutineScope(Dispatchers.IO).launch {
-      try {
-        val response = RetrofitClient.apiService.controlMotors(yawDir, yawSteps, pitchDir, pitchSteps)
-        withContext(Dispatchers.Main) {
-          // Handle response if needed
-          Log.d(TAG, "Motors moved: ${response.string()}")
-        }
-      } catch (e: Exception) {
-        withContext(Dispatchers.Main) {
-          // Handle error if needed
-          Log.e(TAG, "Error moving motors: $e")
-        }
-      }
+    val data = "yawDir=$yawDir,yawSteps=$yawSteps,pitchDir=$pitchDir,pitchSteps=$pitchSteps,delay=1500\n"
+    Log.e("BARFTASTIC", data)
+    try {
+      serialPort?.write(data.toByteArray(StandardCharsets.UTF_8), 1000)
+    } catch (e: IOException) {
+      Log.e("SerialWrite", "Failed to write data to serial port", e)
     }
+//    CoroutineScope(Dispatchers.IO).launch {
+//      try {
+//        val response = RetrofitClient.apiService.controlMotors(yawDir, yawSteps, pitchDir, pitchSteps)
+//        withContext(Dispatchers.Main) {
+//          // Handle response if needed
+//          Log.d(TAG, "Motors moved: ${response.string()}")
+//        }
+//      } catch (e: Exception) {
+//        withContext(Dispatchers.Main) {
+//          // Handle error if needed
+//          Log.e(TAG, "Error moving motors: $e")
+//        }
+//      }
+//    }
   }
 
   override fun onFailure(e: Exception) {

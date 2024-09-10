@@ -16,7 +16,13 @@
 
 package com.google.mlkit.vision.demo.kotlin
 
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import android.os.Build.VERSION_CODES
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
@@ -29,6 +35,7 @@ import android.widget.Button
 import android.widget.CompoundButton
 import android.widget.ImageView
 import android.widget.Spinner
+import android.widget.TextView
 import android.widget.Toast
 import android.widget.ToggleButton
 import androidx.annotation.RequiresApi
@@ -69,12 +76,18 @@ import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
 import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
 import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import com.hoho.android.usbserial.driver.UsbSerialDriver
+import com.hoho.android.usbserial.driver.UsbSerialPort
+import com.hoho.android.usbserial.driver.UsbSerialProber
+import com.hoho.android.usbserial.util.SerialInputOutputManager
+import java.nio.charset.StandardCharsets
+import java.util.concurrent.Executors
 
 /** Live preview demo app for ML Kit APIs using CameraX. */
 @KeepName
 @RequiresApi(VERSION_CODES.LOLLIPOP)
 class CameraXLivePreviewActivity :
-  AppCompatActivity(), OnItemSelectedListener, CompoundButton.OnCheckedChangeListener {
+  AppCompatActivity(), OnItemSelectedListener, CompoundButton.OnCheckedChangeListener, SerialInputOutputManager.Listener {
 
   private var previewView: PreviewView? = null
   private var graphicOverlay: GraphicOverlay? = null
@@ -87,6 +100,33 @@ class CameraXLivePreviewActivity :
   private var selectedModel = OBJECT_DETECTION
   private var lensFacing = CameraSelector.LENS_FACING_BACK
   private var cameraSelector: CameraSelector? = null
+
+  private lateinit var usbManager: UsbManager
+  private var serialPort: UsbSerialPort? = null
+  private var usbIoManager: SerialInputOutputManager? = null
+  private val ACTION_USB_PERMISSION = "com.example.serialledcontrol.USB_PERMISSION"
+
+  private val usbReceiver = object : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+      val action = intent.action
+      if (ACTION_USB_PERMISSION == action) {
+        synchronized(this) {
+          val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+          if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
+            device?.let {
+              val availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
+              val driver = availableDrivers.firstOrNull { it.device == device }
+              if (driver != null) {
+                openUsbConnection(driver)
+              }
+            }
+          } else {
+            updateLog("USB permission denied.")
+          }
+        }
+      }
+    }
+  }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -150,9 +190,15 @@ class CameraXLivePreviewActivity :
       startActivity(intent)
     }
     val moveButton: Button = findViewById(R.id.move_button)
+    usbManager = getSystemService(USB_SERVICE) as UsbManager
 
+    // Register receiver for USB permission with RECEIVER_NOT_EXPORTED flag
+    val filter = IntentFilter(ACTION_USB_PERMISSION)
+    registerReceiver(usbReceiver, filter, RECEIVER_NOT_EXPORTED)
+
+    setupUsbConnection()
     // Initialize the face detector processor with the button
-    val faceDetectorProcessor = FaceDetectorProcessor(this, null, moveButton)
+    val faceDetectorProcessor = FaceDetectorProcessor(this, null, moveButton, serialPort)
 
   }
 
@@ -218,6 +264,12 @@ class CameraXLivePreviewActivity :
   public override fun onDestroy() {
     super.onDestroy()
     imageProcessor?.run { this.stop() }
+
+    unregisterReceiver(usbReceiver)
+    usbIoManager?.stop()
+    serialPort?.close()
+    updateLog("USB connection closed.")
+    super.onDestroy()
   }
 
   private fun bindAllCameraUseCases() {
@@ -313,7 +365,7 @@ class CameraXLivePreviewActivity :
             val faceDetectorOptions = PreferenceUtils.getFaceDetectorOptions(this)
             val moveButton: Button = findViewById(R.id.move_button)
 
-            FaceDetectorProcessor(this, faceDetectorOptions, moveButton)
+            FaceDetectorProcessor(this, faceDetectorOptions, moveButton, serialPort)
 
           }
           BARCODE_SCANNING -> {
@@ -437,5 +489,69 @@ class CameraXLivePreviewActivity :
     private const val FACE_MESH_DETECTION = "Face Mesh Detection (Beta)"
 
     private const val STATE_SELECTED_MODEL = "selected_model"
+  }
+
+  private fun setupUsbConnection() {
+    val availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
+    if (availableDrivers.isEmpty()) {
+      updateLog("No USB devices found.")
+      return
+    }
+
+    val driver = availableDrivers[0]
+    val device = driver.device
+
+    // Check if permission is granted, request if not
+    if (usbManager.hasPermission(device)) {
+      openUsbConnection(driver)
+    } else {
+      val permissionIntent = PendingIntent.getBroadcast(this, 0, Intent(ACTION_USB_PERMISSION), PendingIntent.FLAG_IMMUTABLE)
+      usbManager.requestPermission(device, permissionIntent)
+      updateLog("Requesting USB permission.")
+    }
+  }
+
+  private fun openUsbConnection(driver: UsbSerialDriver) {
+    val connection = usbManager.openDevice(driver.device)
+    if (connection == null) {
+      updateLog("Failed to open USB device.")
+      return
+    }
+
+    serialPort = driver.ports[0] // Most devices have just one port (port 0)
+    serialPort?.open(connection)
+    serialPort?.setParameters(115200, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+
+    // Start event-driven read
+    usbIoManager = SerialInputOutputManager(serialPort, this)
+    Executors.newSingleThreadExecutor().submit(usbIoManager)
+
+    updateLog("USB device connected: ${driver.device.productName}")
+  }
+
+  private fun sendSerialData(data: String) {
+    serialPort?.write(data.toByteArray(StandardCharsets.UTF_8), 1000)
+    updateLog("Sent data: $data")
+  }
+
+  private fun updateLog(message: String) {
+    runOnUiThread {
+      Log.e("BAHH", message)
+    }
+  }
+
+  override fun onNewData(data: ByteArray?) {
+    runOnUiThread {
+      data?.let {
+        val receivedData = String(it, StandardCharsets.UTF_8)
+        Log.e("BAHH", "Received: $receivedData")
+      }
+    }
+  }
+
+  override fun onRunError(e: Exception?) {
+    runOnUiThread {
+      Log.e("BAHH", "Error: ${e?.message}")
+    }
   }
 }

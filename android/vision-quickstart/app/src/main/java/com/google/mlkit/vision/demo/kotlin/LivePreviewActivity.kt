@@ -16,7 +16,13 @@
 
 package com.google.mlkit.vision.demo.kotlin
 
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 import android.util.Log
@@ -28,6 +34,7 @@ import android.widget.Button
 import android.widget.CompoundButton
 import android.widget.ImageView
 import android.widget.Spinner
+import android.widget.TextView
 import android.widget.Toast
 import android.widget.ToggleButton
 import com.google.android.gms.common.annotation.KeepName
@@ -55,17 +62,27 @@ import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
 import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
 import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import com.hoho.android.usbserial.driver.UsbSerialDriver
+import com.hoho.android.usbserial.driver.UsbSerialPort
+import com.hoho.android.usbserial.driver.UsbSerialProber
+import com.hoho.android.usbserial.util.SerialInputOutputManager
 import java.io.IOException
+import java.nio.charset.StandardCharsets
+import java.util.concurrent.Executors
 
 /** Live preview demo for ML Kit APIs. */
 @KeepName
 class LivePreviewActivity :
-  AppCompatActivity(), OnItemSelectedListener, CompoundButton.OnCheckedChangeListener {
+  AppCompatActivity(), OnItemSelectedListener, CompoundButton.OnCheckedChangeListener,SerialInputOutputManager.Listener {
 
   private var cameraSource: CameraSource? = null
   private var preview: CameraSourcePreview? = null
   private var graphicOverlay: GraphicOverlay? = null
   private var selectedModel = OBJECT_DETECTION
+  private lateinit var usbManager: UsbManager
+  private var serialPort: UsbSerialPort? = null
+  private var usbIoManager: SerialInputOutputManager? = null
+  private val ACTION_USB_PERMISSION = "com.example.serialledcontrol.USB_PERMISSION"
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -119,6 +136,13 @@ class LivePreviewActivity :
       intent.putExtra(SettingsActivity.EXTRA_LAUNCH_SOURCE, LaunchSource.LIVE_PREVIEW)
       startActivity(intent)
     }
+    usbManager = getSystemService(USB_SERVICE) as UsbManager
+
+    // Register receiver for USB permission with RECEIVER_NOT_EXPORTED flag
+    val filter = IntentFilter(ACTION_USB_PERMISSION)
+    registerReceiver(usbReceiver, filter, RECEIVER_NOT_EXPORTED)
+
+    setupUsbConnection()
 
     createCameraSource(selectedModel)
   }
@@ -224,7 +248,7 @@ class LivePreviewActivity :
           val moveButton: Button = findViewById(R.id.move_button)
 
           cameraSource!!.setMachineLearningFrameProcessor(
-            FaceDetectorProcessor(this, faceDetectorOptions, moveButton)
+            FaceDetectorProcessor(this, faceDetectorOptions, moveButton, serialPort)
           )
         }
         BARCODE_SCANNING -> {
@@ -343,6 +367,97 @@ class LivePreviewActivity :
     super.onDestroy()
     if (cameraSource != null) {
       cameraSource?.release()
+    }
+
+    unregisterReceiver(usbReceiver)
+    usbIoManager?.stop()
+    serialPort?.close()
+    updateLog("USB connection closed.")
+    super.onDestroy()
+  }
+
+  private val usbReceiver = object : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+      val action = intent.action
+      if (ACTION_USB_PERMISSION == action) {
+        synchronized(this) {
+          val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+          if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
+            device?.let {
+              val availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
+              val driver = availableDrivers.firstOrNull { it.device == device }
+              if (driver != null) {
+                openUsbConnection(driver)
+              }
+            }
+          } else {
+            updateLog("USB permission denied.")
+          }
+        }
+      }
+    }
+  }
+  private fun setupUsbConnection() {
+    val availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
+    if (availableDrivers.isEmpty()) {
+      updateLog("No USB devices found.")
+      return
+    }
+
+    val driver = availableDrivers[0]
+    val device = driver.device
+
+    // Check if permission is granted, request if not
+    if (usbManager.hasPermission(device)) {
+      openUsbConnection(driver)
+    } else {
+      val permissionIntent = PendingIntent.getBroadcast(this, 0, Intent(ACTION_USB_PERMISSION), PendingIntent.FLAG_IMMUTABLE)
+      usbManager.requestPermission(device, permissionIntent)
+      updateLog("Requesting USB permission.")
+    }
+  }
+
+  private fun openUsbConnection(driver: UsbSerialDriver) {
+    val connection = usbManager.openDevice(driver.device)
+    if (connection == null) {
+      updateLog("Failed to open USB device.")
+      return
+    }
+
+    serialPort = driver.ports[0] // Most devices have just one port (port 0)
+    serialPort?.open(connection)
+    serialPort?.setParameters(115200, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+
+    // Start event-driven read
+    usbIoManager = SerialInputOutputManager(serialPort, this)
+    Executors.newSingleThreadExecutor().submit(usbIoManager)
+
+    updateLog("USB device connected: ${driver.device.deviceName}")
+  }
+
+  private fun sendSerialData(data: String) {
+    serialPort?.write(data.toByteArray(StandardCharsets.UTF_8), 1000)
+    updateLog("Sent data: $data")
+  }
+
+  private fun updateLog(message: String) {
+    runOnUiThread {
+      Log.e("BAHH", message)
+    }
+  }
+
+  override fun onNewData(data: ByteArray?) {
+    runOnUiThread {
+      data?.let {
+        val receivedData = String(it, StandardCharsets.UTF_8)
+        Log.e("BAHH", "Received: $receivedData")
+      }
+    }
+  }
+
+  override fun onRunError(e: Exception?) {
+    runOnUiThread {
+      Log.e("BAHH", "Error: ${e?.message}")
     }
   }
 

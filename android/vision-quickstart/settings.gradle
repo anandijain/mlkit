@@ -1,2 +1,8 @@
 rootProject.name='ML Kit Vision Quickstart'
 include ':app'
+
+//dependencyResolutionManagement {
+//    repositories {
+//        maven { url 'https://jitpack.io' }
+//    }
+//}
